@@ -1,0 +1,475 @@
+#!/bin/bash
+export POSSIXLY_CORRECT=yes
+
+
+#       Operační systémy
+#          Projekt 1.
+#           31.3.2022
+#      Daniel Zarsky, xzarsk04
+
+# Shellový skript pro analýzu záznamů osob s prokázanou nákazou koronavirem,
+# způsobujícím onemocnění COVID-19 na území České republiky
+
+#prints basic info about the program options
+print_help()
+{
+  echo "COMMANDS:"
+  echo "infected ------- prints a total number of unique records "
+  echo "gender   ------- prints a total number of unique records separately for each gender "
+  echo "merge    ------- concatenates all given files into one omitting headers except the first one"
+  echo "age      ------- prints a statistics for each age category "
+  echo "daily    ------- prints a total number of unique records by day"
+  echo "monthly  ------- prints a total number of unique records by month"
+  echo "yearly   ------- prints a total number of unique records by year "
+  echo "countries------- prints a total number of unique records for each country, except the Czech Republic "
+  echo "districts------- prints a total number of unique records for each district of the Czech Republic"
+   echo "regions ------- prints a total number of unique records for each region of the Czech Republic"
+   echo "SWITCHES:"
+   echo "-g    ------- take into consideration only given gender arg: M -for males,Z -for women"
+  echo "-a     ------- take into consideration only records after given date, date format yyyy-mm-dd "
+  echo "-b     ------- take into consideration only records after given date, date format yyyy-mm-dd "
+  echo "-s     ------- prints graph instead of numbers, optional argument (number) adjust the graph so the argument responds to the greatest value  "
+}
+
+SOURCE="" #all given files or stdin
+g=false #switch gender
+GENDER="" #argument of gender
+a=false #switch after
+b=false #switch before
+DATETIME="" # argument of before and after
+s=false #switch graph
+WIDTH=0 #arument of the graph
+COMMMAND="" #choosen command
+max=0  #maximal value for graph adjust
+
+error_print()
+{
+  >&2 echo "Error: $1"
+  exit 99
+}
+#processes the files on input, decompress them if needed and returns string stream
+get_source()
+{
+    local stream=""
+    local input=""
+    if [ "$SOURCE" != "" ]; then
+
+        local source=("$SOURCE")
+              for i in ${source[*]}; do
+                if [ -r "$i" ]; then
+
+                            if [[ "$i" = *".gz"* ]]; then  # gz file
+
+                              input=$(gzip -dc "$i")
+
+                            elif [[ "$i" = *".bz2"* ]]; then #bz2 file
+
+                              input=$(bzip2 -dc "$i")
+
+                            elif [[ "$i" = *".csv"* ]]; then #csv file
+                                 input=$(cat "$i")  #normal file
+                            else
+                               error_print "incorrect format file:$i "
+                            fi
+
+                else
+                  error_print "Unreadable file: $i "
+
+
+                fi
+
+                if [ "$stream" == "" ]; then
+                  stream="$input"
+                else
+                  stream+=$(echo "$input" | awk 'BEGIN {printf("\n")} {print}')
+                fi
+              done
+
+    else
+      stream=$(cat /dev/stdin)
+    fi
+
+     echo "$stream"  # stream of all the data processed
+
+}
+
+#check if there are any invalid records
+validate_negative() #prints errors
+{
+  get_source |  awk 'FNR>1{print}' | awk -F "," '{if(($3<0)&&($3!="")){printf("Invalid age: %s\n",$0)}}' | awk 'FNR>1{print}' | awk -F "," -v date="$(date +"%Y-%m-%d")" '{if(($2>date)&&($2!="datum")){printf("Invalid date: %s\n",$0)}}'
+}
+
+#prints valid data for further processing
+validate_pos()
+{
+  get_source |  awk 'FNR>1{print}' | awk -F "," '{if(($3>=0)||($3=="")){print}}' | awk -F "," -v date="$(date +"%Y-%m-%d")" '{if(($2<=date)){print}}'
+}
+
+#processes the switches
+filter()
+{
+
+       if [ $a = true ] && [ $b = true ]; then
+             error_print "Incorrect use of switches"
+       fi
+  #combination gender male + time switches
+        if [ $g = true ] && [ $GENDER = M ]; then
+
+           if  [ $a = true ];then
+             awk -F "," -v DATETIME=$DATETIME '{ if(($2 >= DATETIME) && ($4 == "M" )){print}}'
+
+            fi
+             if [ $b = true ];then
+                 awk  "," -v DATETIME=$DATETIME '{ if(($2 <= DATETIME) && ($4 == "M" )){print}}'
+             fi
+        fi
+
+ # combination gender female + time switches
+        if  [ $g = true ] && [ $GENDER = Z ]; then
+
+              if  [ $a = true ];then
+              awk -F "," -v DATETIME=$DATETIME '{ if(($2 >= DATETIME) && ($4 == "Z" )){print}}'
+             fi
+             if [ $b = true ];then
+              awk -F "," -v DATETIME=$DATETIME '{ if(($2 <= DATETIME) && ($4 =="Z" )){print}}'
+             fi
+        fi
+
+#only after
+      if [ $g = false ] && [ $a = true ]; then
+
+
+              awk -F "," -v DATETIME=$DATETIME '{ if ($2 >= DATETIME) {print $0}}'
+
+      fi
+ #only before
+      if [ $g = false ] && [ $b = true ]; then
+             
+             
+           awk -F "," -v DATETIME=$DATETIME '{ if ($2 <= DATETIME) {print $0}}'
+
+      fi
+  #only gender
+      if [ $g = true ] && [ $a = false ] && [ $b = false ]; then
+
+                  if  [ $GENDER = M ]; then
+                    awk -F "," '/,M,/ {print}'
+
+                 fi
+                 if  [ $GENDER = Z ]; then
+                    awk -F "," '/,Z,/ {print}'
+
+                fi
+      fi
+      #no switches
+       if [ $g = false ] && [ $a = false ] && [ $b = false ]; then
+      awk -F "," '{print }'
+       fi
+
+}
+get_max()
+{
+
+   if [ "$COMMMAND" = "daily" ]; then
+     max=$( validate_pos | filter | awk 'FNR>1{print}' | awk -F "," '{print $2}' | sort | uniq -c | awk 'BEGIN{a=0}{if ($1>a){a=$1}} END{print a}')
+
+   fi
+   if  [ "$COMMMAND" = "monthly" ]; then
+     max=$(validate_pos | filter | awk 'FNR>1{print}' |  awk -F "," '$2=substr($2,1,7){print $2}' | sort | uniq -c | awk 'BEGIN{a=0}{if ($1>a){a=$1}} END{print a}')
+
+   fi
+
+   if [ "$COMMMAND" = "yearly" ]; then
+     max=$(validate_pos | filter | awk 'FNR>1{print}' |  awk -F "," '{$2=substr($2,1,4)}{print $2}' | sort | uniq -c | awk 'BEGIN{a=0}{if ($1>a){a=$1}} END{print a}')
+
+   fi
+
+   if  [ "$COMMMAND" = "countries" ]; then
+       max=$(validate_pos | filter | awk 'FNR>1{print}' |  awk -F "," '{ if($8 != "") print $8}' | sort | uniq -c | awk 'BEGIN{a=0}{if ($1>a){a=$1}} END{print a}')
+
+   fi
+
+   if  [ "$COMMMAND" = "districts" ]; then
+      max=$(validate_pos | filter | awk 'FNR>1{print}' | awk -F "," '{ if($6 != "") print $6}' | sort | uniq -c | awk 'BEGIN{a=0}{if ($1>a){a=$1}} END{print a}')
+
+   fi
+
+   if   [ "$COMMMAND" = "regions" ]; then
+        max=$(validate_pos | filter | awk 'FNR>1{print}' | awk -F "," '{ if($5 != "") print $5}' | sort | uniq -c | awk 'BEGIN{a=0}{if ($1>a){a=$1}} END{print a}')
+
+   fi
+}
+
+#prints a graph for two argument input
+graph()
+ {
+
+             get_max
+             awk  -v s=$s -v command=$COMMMAND -v width=$WIDTH -v max=$max '
+            {
+            if(width==0)
+            {
+                  if(command=="daily"){divider=500}
+                  if(command=="monthly"){divider=10000}
+                  if(command=="yearly"){divider=100000 }
+                  if(command=="countries"){divider=100 }
+                  if(command=="regions"){divider=10000}
+                  if(command=="districts"){divider=1000}
+                  if(command=="gender"){divider=100000}
+                  if (command=="age"){divider=10000 }
+            }
+            else {
+                if(command=="gender"){divider=100000}
+                if (command=="age"){divider=10000}
+                else{divider=max/width}
+            }
+
+
+
+                 if((s=="true"))
+                 {
+                 printf("%s :",$2)
+                       for( i=0; i<($1/divider); i++)
+                       {
+                            printf("#")
+                       }
+                 printf("\n")
+                 }
+                 else{printf"%s: %s \n", $2, $1}
+
+             }
+             '
+}
+
+#prints a graph for one argument input and none category
+graph_none()
+{
+          get_max
+           awk  -v s=$s -v command=$COMMMAND -v width=$WIDTH -v max=$max '
+          {
+          if(width==0)
+          {
+                if(command=="daily"){divider=500}
+                if(command=="monthly"){divider=10000}
+                if(command=="yearly"){divider=100000 }
+                if(command=="countries"){divider=100 }
+                if(command=="regions"){divider=10000}
+                if(command=="districts"){divider=1000}
+                if(command=="gender"){divider=100000}
+                if (command=="age"){divider=10000 }
+          }
+          else {
+              if(command=="gender"){divider=100000}
+              if (command=="age"){divider=10000}
+              else{divider=max/width}
+          }
+               if((s=="true"))
+               {
+                     for( i=0; i<($1/divider); i++)
+                     {
+                          printf("#")
+                     }
+               printf("\n")
+               }
+               else{printf"%s \n",$1}
+
+           }
+           '
+
+}
+
+#processes the commands
+commands(){
+
+  if [ "$COMMMAND" = "infected" ]; then
+     validate_pos | filter | awk -F "," 'BEGIN {count=0;}  {count+=1} END {printf  "%d\n ", count}'
+  fi
+  if [ "$COMMMAND" = "gender" ]; then
+             echo -n "M:"
+             validate_pos | filter | awk -F "," 'BEGIN {count=0;}  { if (($3==M)) count+=1} END {printf  "%d", count}' | graph_none
+             echo -n "Z: "
+            validate_pos | filter | awk -F "," 'BEGIN {count=0;}  { if (($3==Z)) count+=1} END {printf  "%d", count}' | graph_none
+            echo -n "None: "
+             validate_pos | filter | awk -F "," 'BEGIN {count=0;}  { if (($3=="")) count+=1} END {printf  "%d", count}' | graph_none
+  fi
+  if [ "$COMMMAND" = "daily" ]; then
+
+       validate_pos | filter | awk 'FNR>1{print}' | awk -F "," '{print $2}' | sort | uniq -c | graph
+  fi
+   if [ "$COMMMAND" = "monthly" ]; then
+
+      validate_pos | filter | awk 'FNR>1{print}' |  awk -F "," '$2=substr($2,1,7){print $2}' | sort | uniq -c | graph
+   fi
+   if [ "$COMMMAND" = "yearly" ]; then
+
+     validate_pos | filter | awk 'FNR>1{print}' |  awk -F "," '{$2=substr($2,1,4)}{print $2}' | sort | uniq -c | graph
+   fi
+   if [ "$COMMMAND" = "countries" ]; then
+
+        validate_pos | filter | awk 'FNR>1{print}' | awk -F "," '{ if($8 != "") print $8}' | sort | uniq -c | graph
+         echo -n "None: "
+        validate_pos | filter | awk -F "," 'BEGIN {count=0;}  { if (($8=="")) count+=1} END {printf  "%d", count}' | graph_none
+   fi
+  if [ "$COMMMAND" = "districts" ]; then
+      validate_pos| filter | awk 'FNR>1{print}' | awk -F "," '{ if($6 != "") print $6}' | sort | uniq -c | graph
+       echo -n "None: "
+       validate_pos | filter | awk -F "," 'BEGIN {count=0;}  { if (($6=="")&&($1!="")) count+=1} END {printf  "%d", count}' | graph_none
+  fi
+  if [ "$COMMMAND" = "regions" ]; then
+          validate_pos | filter | awk 'FNR>1{print}' | awk -F "," '{ if($5 != "") print $5}' | sort | uniq -c | graph
+           echo -n "None: "
+          validate_pos | filter | awk -F "," 'BEGIN {count=0;}  { if (($5=="")) count+=1} END {printf  "%d", count}' | graph_none
+
+  fi
+  if  [ "$COMMMAND" = "age" ]; then
+           echo -n "0-5   :"
+          validate_pos | filter | awk -F "," 'BEGIN {count=0;}  { if (($3>= 0)&&($3<= 5)) count+=1} END {printf  "%d", count}' | graph_none
+          echo -n "6-15  :"
+          validate_pos | filter | awk -F "," 'BEGIN {count=0;}  { if (($3>= 6)&&($3<= 15)) count+=1} END {printf "%d", count}' | graph_none
+          echo -n "16-25 :"
+          validate_pos | filter | awk -F "," 'BEGIN {count=0;}  { if (($3>= 16)&&($3<= 25)) count+=1} END {printf  "%d", count}' | graph_none
+          echo -n "26-35 :"
+         validate_pos | filter | awk -F "," 'BEGIN {count=0;}  { if (($3>= 26)&&($3<= 35)) count+=1} END {printf  "%d", count}' | graph_none
+         echo -n "36-45 :"
+          validate_pos | filter | awk -F "," 'BEGIN {count=0;}  { if (($3>= 36)&&($3<= 45)) count+=1} END {printf  "%d", count}' | graph_none
+          echo -n "46-55 :"
+         validate_pos | filter | awk -F "," 'BEGIN {count=0;}  { if (($3>= 46)&&($3<= 55)) count+=1} END {printf  "%d", count}' | graph_none
+          echo -n "56-65 :"
+          validate_pos | filter | awk -F "," 'BEGIN {count=0;}  { if (($3>= 56)&&($3<= 65)) count+=1} END {printf  "%d", count}' | graph_none
+          echo -n "66-75 :"
+          validate_pos | filter | awk -F "," 'BEGIN {count=0;}  { if (($3>= 66)&&($3<= 75)) count+=1} END {printf  "%d", count}' | graph_none
+          echo -n "76-85 :"
+          validate_pos | filter | awk -F "," 'BEGIN {count=0;}  { if (($3>= 76)&&($3<= 85)) count+=1} END {printf  "%d", count}' | graph_none
+          echo -n "86-95 :"
+          validate_pos | filter | awk -F "," 'BEGIN {count=0;}  { if (($3>= 86)&&($3<= 95)) count+=1} END {printf  "%d", count}' | graph_none
+          echo -n "96-105:"
+           validate_pos | filter | awk -F "," 'BEGIN {count=0;}  { if (($3>= 96)&&($3<= 105)) count+=1} END {printf  "%d", count}' | graph_none
+           echo -n ">105  :"
+          validate_pos | filter | awk -F "," 'BEGIN {count=0;}  { if (($3> 105)) count+=1} END {printf  "%d", count}' | graph_none
+           echo -n "None: "
+          validate_pos | filter | awk -F "," 'BEGIN {count=0;}  { if (($3=="")) count+=1} END {printf "%d", count}' | graph_none
+  fi
+  if [ "$COMMMAND" = "merge" ]; then
+      get_source |   awk 'FNR=1{print}'
+       validate_pos| filter |  awk '{if($2!="datum"){print}}'
+   fi
+
+   # no command given processing only switches
+   if [ "$COMMMAND" = "" ]; then
+        validate_pos | filter
+   fi
+
+}
+
+#loading all switches, commands and files
+while [ "$#" -gt 0 ]; do
+
+	case "$1" in
+     -h )
+          print_help
+          exit 0
+      ;;
+    -a )
+       a=true
+        if  [[ $2 =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] && date -d "$1" >/dev/null 2>&1; then
+       DATETIME=$2
+       shift
+       else
+         error_print "Given argument: $2 is not a valid date"
+       fi
+       shift
+      ;;
+    -b )
+       b=true
+       if  [[ $2 =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] && date -d "$2" >/dev/null 2>&1; then
+      DATETIME="$2"
+      shift
+      else
+        error_print "Given argument: $2 is not a valid date"
+      fi
+      shift
+    ;;
+   -g )
+        g=true
+        if [ $2 = "M" ] || [ $2 = "Z" ]; then
+        GENDER=$2
+        shift
+        else
+         error_print "Unknown gender: $2"
+        fi
+        shift
+      ;;
+    -s )
+
+        s=true
+        case $2 in
+            ''|*[!0-9]*)
+               shift
+               ;;
+            *)   # voluntary argument width is set
+              WIDTH=$2
+
+              shift
+              shift;;
+        esac
+
+      ;;
+     infected )
+      COMMMAND=$1
+      shift
+      ;;
+     merge )
+          COMMMAND=$1
+        shift
+          ;;
+    gender )
+      COMMMAND=$1
+      shift
+      ;;
+    age )
+      COMMMAND=$1
+      shift
+      ;;
+    daily )
+      COMMMAND=$1
+
+      shift
+      ;;
+    monthly )
+        COMMMAND=$1
+        shift
+        ;;
+    yearly )
+        COMMMAND=$1
+        shift
+        ;;
+      countries )
+            COMMMAND=$1
+            shift
+            ;;
+      regions )
+            COMMMAND=$1
+            shift
+            ;;
+      districts )
+             COMMMAND=$1
+            shift
+            ;;
+     *)     # no command given processing only switches
+            if [ "$SOURCE" == "" ]; then #empty source
+                  SOURCE="$1"
+            else
+              SOURCE="$SOURCE $1"
+            fi
+            shift
+     ;;
+ esac
+ done
+
+ # at first check for invalid data
+ validate_negative
+
+ #then process the data
+ commands
+
+ exit 0;
